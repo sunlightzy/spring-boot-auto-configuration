@@ -5,11 +5,11 @@
 环境配置清单
 
 > java version "1.8.0_161"
-
+>
 > Java(TM) SE Runtime Environment (build 1.8.0_161-b12)
-
+>
 > Java HotSpot(TM) 64-Bit Server VM (build 25.161-b12, mixed mode)
-
+>
 > Spring Boot  2.1.0.RELEASE
 
 项目 [GitHub](https://github.com/sunlightzy/spring-boot-auto-configuration)
