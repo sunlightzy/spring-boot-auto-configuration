@@ -1,0 +1,35 @@
+spring:
+  application:
+    name: spring-boot-auto-configuration-demo
+
+# 测试 @ConditionalOnProperty(value = "com.glmapper.hello.one")
+#com.glmapper.hello.one:        # 正常
+#com.glmapper.hello.one: 1      # 正常
+#com.glmapper.hello.one: null   # 正常
+#com.glmapper.hello.one: true   # 正常
+#com.glmapper.hello.one: false  # 失效
+
+# 测试 @ConditionalOnProperty(value = "com.glmapper.hello.two", havingValue = "2", matchIfMissing = true)
+#matchIfMissing = true表示 : 配置项不存在则生效, matchIfMissing 默认为 false 表示配置项不存在则失效
+#配置项存在则必须值为2才生效
+#com.glmapper.hello.two: 2        # 正常
+#com.glmapper.hello.two: 9        # 失效
+#com.glmapper.hello.two:          # 失效
+#com.glmapper.hello.two: true     # 失效
+
+# 测试 @ConditionalOnProperty(prefix = "com.glmapper.hello", name = {"three", "four"})
+#表示 com.glmapper.hello.three 和 com.glmapper.hello.four 都存在才生效, 缺一不可
+#com.glmapper.hello:          # 正常
+#  three: 3
+#  four: 4
+#com.glmapper.hello:          # 失效
+#  three: 3
+
+# 测试 @ConditionalOnProperty(prefix = "com.glmapper.hello", name = {"five", "six"}, havingValue="123", matchIfMissing = true)
+#matchIfMissing = true表示 : 配置项不存在则生效, matchIfMissing 默认为 false 表示配置项不存在则失效
+#com.glmapper.hello:          # 正常
+#  five: 123
+#  six: 123
+#com.glmapper.hello:          # 失效
+#  five: 1230
+#  six: 123
