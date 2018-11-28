@@ -600,11 +600,17 @@ private ConfigurableEnvironment prepareEnvironment(SpringApplicationRunListeners
     // 1. 收集用户自定义的配置和系统环境变量
     // 2. 收集Profiles信息
     configureEnvironment(environment, applicationArguments.getSourceArgs());
+    // 遍历listeners 调用 environmentPrepared
     listeners.environmentPrepared(environment);
-    if (!this.webEnvironment) {
+    // 把环境绑定到SpringApplication, 实际上是增加了一个K-V键值对==>
+    // "spring.main" = SpringApplication的Bindable对象
+    bindToSpringApplication(environment);
+    if (!this.isCustomEnvironment) {
+        // 推断项目的环境,并把当前环境转换成项目所需要的环境
         environment = new EnvironmentConverter(getClassLoader())
-            .convertToStandardEnvironmentIfNecessary(environment);
+            .convertEnvironmentIfNecessary(environment, deduceEnvironmentClass());
     }
+    ConfigurationPropertySources.attach(environment);
     return environment;
 }
 ```
@@ -616,28 +622,34 @@ private ConfigurableEnvironment prepareEnvironment(SpringApplicationRunListeners
 **根据是否为web环境来决定创建一个web应用或者非web应用的上下文**
 
 ```java
-/**
- * Strategy method used to create the {@link ApplicationContext}. By default this
- * method will respect any explicitly set application context or application context
- * class before falling back to a suitable default.
- * @return the application context (not yet refreshed)
- * @see #setApplicationContextClass(Class)
- */
 protected ConfigurableApplicationContext createApplicationContext() {
-   Class<?> contextClass = this.applicationContextClass;
-   if (contextClass == null) {
-      try {
-         contextClass = Class.forName(this.webEnvironment
-               ? DEFAULT_WEB_CONTEXT_CLASS : DEFAULT_CONTEXT_CLASS);
-      }
-      catch (ClassNotFoundException ex) {
-         throw new IllegalStateException(
-               "Unable create a default ApplicationContext, "
-                     + "please specify an ApplicationContextClass",
-               ex);
-      }
-   }
-   return (ConfigurableApplicationContext) BeanUtils.instantiate(contextClass);
+    Class<?> contextClass = this.applicationContextClass;
+    if (contextClass == null) {
+        try {
+            // 根据环境来创建对应的上下文, 下面的值的包名我省略了
+            //DEFAULT_CONTEXT_CLASS: "AnnotationConfigApplicationContext";
+            //DEFAULT_SERVLET_WEB_CONTEXT_CLASS: "AnnotationConfigServletWebServerApplicationContext";
+            //DEFAULT_REACTIVE_WEB_CONTEXT_CLASS: "AnnotationConfigReactiveWebServerApplicationContext";
+            switch (this.webApplicationType) {
+                case SERVLET:
+                    contextClass = Class.forName(DEFAULT_SERVLET_WEB_CONTEXT_CLASS);
+                    break;
+                case REACTIVE:
+                    contextClass = Class.forName(DEFAULT_REACTIVE_WEB_CONTEXT_CLASS);
+                    break;
+                default:
+                    contextClass = Class.forName(DEFAULT_CONTEXT_CLASS);
+            }
+        }
+        catch (ClassNotFoundException ex) {
+            throw new IllegalStateException(
+                "Unable create a default ApplicationContext, "
+                + "please specify an ApplicationContextClass",
+                ex);
+        }
+    }
+    // 创建并返回应用上下文
+    return (ConfigurableApplicationContext) BeanUtils.instantiateClass(contextClass);
 }
 ```
 
@@ -652,59 +664,215 @@ private void prepareContext(ConfigurableApplicationContext context,
       ConfigurableEnvironment environment, SpringApplicationRunListeners listeners,
       ApplicationArguments applicationArguments, Banner printedBanner) {
    context.setEnvironment(environment);
+    // 做了三件事:
+    // 1. 注册beanNameGenerator到Context中
+    // 2. 为Context设置资源加载器resourceLoader
+    // 3. 为Context设置类加载器
+    // 4. 为Context设置ConversionService, ConversionService是提供值转换服务的
    postProcessApplicationContext(context);
-    // 划重点了, 初始化开始了
+    // 触发ApplicationContextInitializer初始化方法,初始化上下文
    applyInitializers(context);
+    // 遍历触发listener的contextPrepared方法
    listeners.contextPrepared(context);
    if (this.logStartupInfo) {
       logStartupInfo(context.getParent() == null);
       logStartupProfileInfo(context);
    }
 
-   // Add boot specific singleton beans
+   // Add boot specific singleton beans  把命令行参数添加到ioc中
    context.getBeanFactory().registerSingleton("springApplicationArguments",
          applicationArguments);
    if (printedBanner != null) {
       context.getBeanFactory().registerSingleton("springBootBanner", printedBanner);
    }
-
+   if (beanFactory instanceof DefaultListableBeanFactory) {
+       ((DefaultListableBeanFactory) beanFactory)
+        .setAllowBeanDefinitionOverriding(this.allowBeanDefinitionOverriding);
+   }
    // Load the sources
    Set<Object> sources = getSources();
    Assert.notEmpty(sources, "Sources must not be empty");
+    // 加载上下文:
+    // 1. 实例化 BeanDefinitionLoader
+    // 2. 执行load()方法
+    //  2.1 加载启动类上的注解、解析注解元信息、
    load(context, sources.toArray(new Object[sources.size()]));
+    // 遍历listener调动contextLoaded上下文加载完成方法
    listeners.contextLoaded(context);
 }
-```
 
-==**重点开始**==
+// load()最终会到AnnotatedBeanDefinitionReader#doRegisterBean方法,看看做了些啥
+<T> void doRegisterBean(Class<T> annotatedClass, @Nullable Supplier<T> instanceSupplier, @Nullable String name, @Nullable Class<? extends Annotation>[] qualifiers, BeanDefinitionCustomizer... definitionCustomizers) {
 
-```java
-/**
- * Apply any {@link ApplicationContextInitializer}s to the context before it is
- * refreshed.
- * @param context the configured ApplicationContext (not refreshed yet)
- * @see ConfigurableApplicationContext#refresh()
- */
-@SuppressWarnings({ "rawtypes", "unchecked" })
-protected void applyInitializers(ConfigurableApplicationContext context) {
-   for (ApplicationContextInitializer initializer : getInitializers()) {
-      Class<?> requiredType = GenericTypeResolver.resolveTypeArgument(
-            initializer.getClass(), ApplicationContextInitializer.class);
-      Assert.isInstanceOf(requiredType, context, "Unable to call initializer.");
-      initializer.initialize(context);
-   }
+    // 分析启动类的注解的信息
+    AnnotatedGenericBeanDefinition abd = new AnnotatedGenericBeanDefinition(annotatedClass);
+    if (this.conditionEvaluator.shouldSkip(abd.getMetadata())) {
+        return;
+    }
+    // Supplier无参数有返回值的接口方法
+    abd.setInstanceSupplier(instanceSupplier);
+    //检查scope，实例中没有指定，默认是singleton
+    ScopeMetadata scopeMetadata = this.scopeMetadataResolver.resolveScopeMetadata(abd);
+    abd.setScope(scopeMetadata.getScopeName());
+    ////获取bean的名字，这里是启动类
+    String beanName = (name != null ? name : this.beanNameGenerator.generateBeanName(abd, this.registry));
+    // 对于是否是@lazy，是否使用了@primary
+    AnnotationConfigUtils.processCommonDefinitionAnnotations(abd);
+    if (qualifiers != null) {
+        for (Class<? extends Annotation> qualifier : qualifiers) {
+            if (Primary.class == qualifier) {
+                abd.setPrimary(true);
+            }
+            else if (Lazy.class == qualifier) {
+                abd.setLazyInit(true);
+            }
+            else {
+                abd.addQualifier(new AutowireCandidateQualifier(qualifier));
+            }
+        }
+    }
+    for (BeanDefinitionCustomizer customizer : definitionCustomizers) {
+        customizer.customize(abd);
+    }
+    // 根据注解信息生产BeanDefinition
+    BeanDefinitionHolder definitionHolder = new BeanDefinitionHolder(abd, beanName);
+    // 根据Bean的作用域，创建相应的代理对象
+    definitionHolder = AnnotationConfigUtils.applyScopedProxyMode(scopeMetadata, definitionHolder, this.registry);
+    // 将Bean加入到beanDefinitionMap中
+    BeanDefinitionReaderUtils.registerBeanDefinition(definitionHolder, this.registry);
 }
 ```
 
 ### 5. refreshContext
 
+最终会定位到`org.springframework.context.support.AbstractApplicationContext#refresh`方法,  除此之外最后还会注册`ShutdownHook`
 
+```java
+@Override
+public void refresh() throws BeansException, IllegalStateException {
+   synchronized (this.startupShutdownMonitor) {
+      // Prepare this context for refreshing.
+      // 1. 清除缓存
+      // 2. 初始化所有在上下文环境中的占位符配置
+      // 3. 校验所有required的配置是否已经被解析完成
+      prepareRefresh();
 
+      // Tell the subclass to refresh the internal bean factory.
+      // 通知子类刷新Bean工厂
+      //  1. 为BeanFactory设置了一个ID, 就是在yaml文件中配置的spring.application.name
+      ConfigurableListableBeanFactory beanFactory = obtainFreshBeanFactory();
 
+      // Prepare the bean factory for use in this context.
+      // 1. 为BeanFactory设置类加载器
+      // 2. 设置表达式解析器StandardBeanExpressionResolver
+      // 3. 设置配置文件注册器ResourceEditorRegistrar
+      // 4. 设置Bean的后置处理器
+      // 不一一列举了,下面看图
+      prepareBeanFactory(beanFactory);
+
+      try {
+         // Allows post-processing of the bean factory in context subclasses.
+         // 1. 添加子类自定义的Bean后置处理器
+         // 2. 扫描basePackage下的类,按照需求加入到容器
+         // 3. 把带有Spring注解的类加入到容器
+         postProcessBeanFactory(beanFactory);
+
+         // Invoke factory processors registered as beans in the context.
+         // 调用IOC容器中所有的Bean工厂处理器 BeanDefinitionRegistryPostProcessor、BeanFactoryPostProcessor
+         // 1. 配置类后置处理器 ConfigurationClassPostProcessor 解析 配置类 转换为 BeanDefinition
+         //    1.1 @ComponentScan注解配置的basePackage
+         //    1.2 @Import注解导入的配置类
+         //    1.3 @ImportResource注解导入的xml文件
+         //    1.4 @Bean注解的方法
+         //    1.5 @PropertySource注解导入的.properties配置文件
+         //    1.6 处理所有的SpringBoot配置类
+         // 2. 后置处理器太多了, 功能列不过来了
+         invokeBeanFactoryPostProcessors(beanFactory);
+
+         // Register bean processors that intercept bean creation.
+         // 注册所有 用于拦截Bean创建的BeanProcessor
+         registerBeanPostProcessors(beanFactory);
+
+         // Initialize message source for this context.
+         // 初始化MessageSource, 供i18n用的
+         initMessageSource();
+
+         // Initialize event multicaster for this context.
+         // 初始化事件广播器, 在这之前的listener都是遍历直接调用的方法, 从这里开始,listener会通过接受广播的方式回调
+         initApplicationEventMulticaster();
+
+         // Initialize other special beans in specific context subclasses.
+         // 初始化其他特定的Bean在指定的容器中,比如父子容器
+         // 比如在web容器中会初始化TomcatWebServer
+         onRefresh();
+
+         // Check for listener beans and register them.
+         // 检查并注册listener到广播器
+         registerListeners();
+
+         // Instantiate all remaining (non-lazy-init) singletons.
+         // 初始化所有的非懒加载的单例对象
+         // 需要注意的是在AbstractAutowireCapableBeanFactory#createBean(String, RootBeanDefinition, Object[])
+         // 这个方法中有一段如下代码
+         // Give BeanPostProcessors a chance to return a proxy instead of the target bean instance.
+         // 这个方法注释的意思是给BeanPostProcessor一个返回目标接口的代理对象的机会, 具体可查阅和
+         // InstantiationAwareBeanPostProcessor相关的资料
+	     // Object bean = resolveBeforeInstantiation(beanName, mbdToUse);
+         finishBeanFactoryInitialization(beanFactory);
+
+         // Last step: publish corresponding event.
+         // 完成刷新: 
+         // 1. 清除各种缓存
+         // 2. 初始化生命周期处理器
+         // 3. 发布ContextRefreshedEvent事件
+         // 4. 启动WebServer
+         // 5. 发布ServletWebServerInitializedEvent时间
+         finishRefresh();
+      }
+
+      catch (BeansException ex) {
+         if (logger.isWarnEnabled()) {
+            logger.warn("Exception encountered during context initialization - " +
+                  "cancelling refresh attempt: " + ex);
+         }
+
+         // Destroy already created singletons to avoid dangling resources.
+         destroyBeans();
+
+         // Reset 'active' flag.
+         cancelRefresh(ex);
+
+         // Propagate exception to caller.
+         throw ex;
+      }
+
+      finally {
+         // Reset common introspection caches in Spring's core, since we
+         // might not ever need metadata for singleton beans anymore...
+         resetCommonCaches();
+      }
+   }
+}
+```
+
+#### prepareBeanFactory
+
+![image-20181126190231737](https://ws1.sinaimg.cn/large/006tNbRwly1fxlo3y71fbj31610u04gy.jpg)
 
 ### 6. afterRefresh
 
+这个阶段SpringBoot没有具体的实现,留给开发者自定义子类去实现
 
+```java
+/**
+ * Called after the context has been refreshed.
+ * @param context the application context
+ * @param args the application arguments
+ */
+protected void afterRefresh(ConfigurableApplicationContext context,
+      ApplicationArguments args) {
+}
+```
 
 
 
@@ -870,7 +1038,7 @@ object.pool:
 
 ```java
 @Configuration  
-@ConditionalOnProperty(prefix = "object.pool", name = {"size", "timeout"}, havingValue = "100", matchIfMissing = true) 
+@ConditionalOnProperty(prefix = "object.pool", name = {"size", "timeout"}, havingValue = "123", matchIfMissing = true) 
 public class ObjectPoolConfig { 
 
 }
