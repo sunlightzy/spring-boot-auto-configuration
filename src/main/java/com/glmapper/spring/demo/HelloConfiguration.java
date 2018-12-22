@@ -13,7 +13,7 @@ import java.util.Objects;
 /**
  * HelloConfiguration
  *
- * @author zhenyu.szy
+ * @author J.Queue
  * @date 2018-11-27
  */
 @Configuration

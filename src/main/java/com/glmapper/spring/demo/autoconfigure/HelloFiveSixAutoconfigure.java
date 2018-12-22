@@ -12,7 +12,7 @@ import org.springframework.context.annotation.Configuration;
  * com.glmapper.hello.one: 30       //正常
  * 只要com.glmapper.hello.one 配置项存在,且不为false , 配置类都生效
  *
- * @author zhenyu.szy
+ * @author J.Queue
  * @date 2018-11-27
  */
 @Configuration

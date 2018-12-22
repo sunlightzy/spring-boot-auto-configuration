@@ -8,7 +8,7 @@ import org.springframework.context.annotation.Configuration;
  * 如果 com.glmapper.helloTwo 配置存在, 而且值为2时,该配置类生效,
  * 如果该配置不存在 ,该配置类生效
  *
- * @author zhenyu.szy
+ * @author J.Queue
  * @date 2018-11-27
  */
 @Configuration
