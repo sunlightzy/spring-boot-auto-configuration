@@ -18,14 +18,21 @@ import java.util.Objects;
  */
 @Configuration
 public class HelloConfiguration {
-    @Autowired(required = false)
-    HelloOneAutoconfigure helloOneAutoconfigure;
-    @Autowired(required = false)
-    HelloTwoAutoconfigure helloTwoAutoconfigure;
-    @Autowired(required = false)
-    HelloThreeFourAutoconfigure helloThreeFourAutoconfigure;
-    @Autowired(required = false)
-    HelloFiveSixAutoconfigure helloFiveSixAutoconfigure;
+
+    private HelloOneAutoconfigure helloOneAutoconfigure;
+    private HelloTwoAutoconfigure helloTwoAutoconfigure;
+    private HelloThreeFourAutoconfigure helloThreeFourAutoconfigure;
+    private HelloFiveSixAutoconfigure helloFiveSixAutoconfigure;
+
+    public HelloConfiguration(@Autowired(required = false) HelloOneAutoconfigure helloOneAutoconfigure,
+                              @Autowired(required = false) HelloTwoAutoconfigure helloTwoAutoconfigure,
+                              @Autowired(required = false) HelloThreeFourAutoconfigure helloThreeFourAutoconfigure,
+                              @Autowired(required = false) HelloFiveSixAutoconfigure helloFiveSixAutoconfigure) {
+        this.helloFiveSixAutoconfigure = helloFiveSixAutoconfigure;
+        this.helloOneAutoconfigure = helloOneAutoconfigure;
+        this.helloThreeFourAutoconfigure = helloThreeFourAutoconfigure;
+        this.helloTwoAutoconfigure = helloTwoAutoconfigure;
+    }
 
     @PostConstruct
     public void print() {
